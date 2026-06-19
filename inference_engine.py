@@ -119,20 +119,27 @@ def _autotune_options(video_path: Path, opts: dict,
     if w <= 0 or h <= 0:
         return opts  # can't determine, leave unchanged
 
+    cap2 = _cv2.VideoCapture(str(video_path))
+    total_frames = int(cap2.get(_cv2.CAP_PROP_FRAME_COUNT))
+    cap2.release()
+
     opts = opts.copy()
     pixels = w * h
 
-    # Only adjust values the user left at their defaults
+    # High resolution: reduce to half to stay within VRAM budget
     if pixels > 1280 * 720:
         if opts.get("resize_ratio", 1.0) >= 1.0:
             opts["resize_ratio"] = 0.5
             _emit(progress_cb, 0,
-                  f"High resolution ({w}×{h}) detected — auto-set resize_ratio=0.5 to save RAM")
+                  f"High resolution ({w}×{h}) — auto-set resize_ratio=0.5 to save RAM")
         if opts.get("subvideo_length", 80) > 50:
             opts["subvideo_length"] = 50
-    elif pixels > 720 * 480:
-        if opts.get("subvideo_length", 80) > 80:
-            opts["subvideo_length"] = 80
+
+    # Long video (>2000 frames): reduce chunk size to keep memory bounded
+    if total_frames > 2000 and opts.get("subvideo_length", 80) > 40:
+        opts["subvideo_length"] = 40
+        _emit(progress_cb, 0,
+              f"Long video ({total_frames} frames) — auto-set subvideo_length=40")
 
     # Always enable fp16 unless user explicitly disabled it
     if "fp16" not in opts:
@@ -240,17 +247,29 @@ def _build_command(
 
 
 # ── Progress estimation ───────────────────────────────────────────────────────
-# ProPainter prints tqdm bars like:
-#   inpainting: 100%|████| 120/120 [01:23<00:00,  1.44it/s]
-# We parse these to report progress.
+# tqdm writes updates with \r (carriage return), not \n, so we cannot rely on
+# line-by-line iteration. We read the raw byte stream and split on both \r and
+# \n to catch every tqdm update as it arrives.
+#
+# ProPainter pipeline stages and their approximate share of total work:
+#   Stage 0 – optical flow estimation  (RAFT)         ~15 %
+#   Stage 1 – flow completion                         ~15 %
+#   Stage 2 – image propagation                       ~20 %
+#   Stage 3 – inpainting (transformer)                ~50 %
 
 _TQDM_RE = re.compile(r"(\d+)/(\d+)")
 
-# Rough weights for the three pipeline stages visible in stdout:
-#   1. flow completion   (~20 %)
-#   2. image propagation (~20 %)
-#   3. inpainting        (~60 %)
-_STAGE_WEIGHTS = [0.20, 0.20, 0.60]
+_STAGE_NAMES   = ["Estimating optical flow", "Completing optical flow",
+                  "Propagating frames",       "Inpainting"]
+_STAGE_WEIGHTS = [0.15, 0.15, 0.20, 0.50]
+
+# Keywords that appear in tqdm bar descriptions for each stage
+_STAGE_KEYWORDS = [
+    ["raft", "flow estimation", "completing flows"],   # stage 0
+    ["flow completion", "flow_completion"],             # stage 1
+    ["propagat", "img prop", "image prop"],             # stage 2
+    ["inpaint"],                                        # stage 3
+]
 
 
 def _execute(
@@ -262,37 +281,39 @@ def _execute(
 ) -> tuple[int, Path]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # Force tqdm to emit plain-text progress without ANSI colour codes and
+    # with \r updates so we can parse them from a non-TTY pipe.
+    env["TQDM_NCOLS"]        = "120"
+    env["TQDM_DISABLE"]      = "0"
 
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        bufsize=0,          # unbuffered bytes
         env=env,
     )
 
     stage_idx   = 0
-    stage_names = ["Completing optical flow", "Propagating frames", "Inpainting"]
-    accumulated = [0.0, 0.0, 0.0]   # fraction complete per stage
+    accumulated = [0.0] * len(_STAGE_NAMES)
 
-    def read_output():
+    def _parse_chunk(chunk: str):
         nonlocal stage_idx
-        for raw_line in proc.stdout:
-            line = raw_line.rstrip()
+        # Split on both CR and LF so we catch every tqdm update
+        for raw in re.split(r"[\r\n]+", chunk):
+            line = raw.strip()
             if not line:
                 continue
             print(f"[ProPainter] {line}", flush=True)
 
-            # Detect stage transitions by keywords in the tqdm description
             low = line.lower()
-            if "flow completion" in low and stage_idx < 1:
-                stage_idx = 0
-            elif ("propagat" in low or "img prop" in low) and stage_idx < 1:
-                stage_idx = 1
-            elif "inpaint" in low and stage_idx < 2:
-                stage_idx = 2
+
+            # Advance stage: scan forward from current stage only
+            for si in range(stage_idx, len(_STAGE_KEYWORDS)):
+                if any(kw in low for kw in _STAGE_KEYWORDS[si]):
+                    stage_idx = si
+                    break
 
             m = _TQDM_RE.search(line)
             if m:
@@ -301,14 +322,34 @@ def _execute(
                 if total > 0:
                     accumulated[stage_idx] = done / total
 
-            # Weighted overall progress
             overall = sum(
                 accumulated[i] * _STAGE_WEIGHTS[i]
-                for i in range(3)
+                for i in range(len(_STAGE_NAMES))
             )
-            pct = int(overall * 100)
-            msg = stage_names[min(stage_idx, 2)]
-            _emit(progress_cb, pct, msg)
+            pct = min(99, int(overall * 100))
+            _emit(progress_cb, pct, _STAGE_NAMES[stage_idx])
+
+    def read_output():
+        buf = b""
+        while True:
+            chunk = proc.stdout.read(256)
+            if not chunk:
+                break
+            buf += chunk
+            # Decode and flush whenever we see a line-ending character
+            try:
+                text = buf.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            if "\r" in text or "\n" in text:
+                _parse_chunk(text)
+                buf = b""
+        # Flush any remaining buffered bytes
+        if buf:
+            try:
+                _parse_chunk(buf.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
 
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
