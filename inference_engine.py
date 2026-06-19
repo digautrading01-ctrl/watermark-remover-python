@@ -71,6 +71,9 @@ def run_propainter(
     _verify_weights(model_dir)
     _link_weights(model_dir, propainter_dir)
 
+    # Auto-tune options based on video dimensions to prevent OOM
+    opts = _autotune_options(video_path, opts, progress_cb)
+
     cmd = _build_command(
         inference_script, video_path, mask_path, output_dir, opts
     )
@@ -94,6 +97,49 @@ def run_propainter(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _autotune_options(video_path: Path, opts: dict,
+                      progress_cb: Optional[Callable]) -> dict:
+    """
+    Inspect video resolution and auto-lower subvideo_length / resize_ratio
+    if the user left them at defaults, to avoid out-of-memory crashes.
+
+    ProPainter reads ALL frames into RAM before chunked processing begins.
+    Rule of thumb (FP16):
+        pixels > 1280×720  → force resize_ratio 0.5 unless user set it
+        subvideo_length     → cap at 50 for high-res, 80 for lower-res
+    """
+    import cv2 as _cv2
+
+    cap = _cv2.VideoCapture(str(video_path))
+    w   = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+    h   = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    if w <= 0 or h <= 0:
+        return opts  # can't determine, leave unchanged
+
+    opts = opts.copy()
+    pixels = w * h
+
+    # Only adjust values the user left at their defaults
+    if pixels > 1280 * 720:
+        if opts.get("resize_ratio", 1.0) >= 1.0:
+            opts["resize_ratio"] = 0.5
+            _emit(progress_cb, 0,
+                  f"High resolution ({w}×{h}) detected — auto-set resize_ratio=0.5 to save RAM")
+        if opts.get("subvideo_length", 80) > 50:
+            opts["subvideo_length"] = 50
+    elif pixels > 720 * 480:
+        if opts.get("subvideo_length", 80) > 80:
+            opts["subvideo_length"] = 80
+
+    # Always enable fp16 unless user explicitly disabled it
+    if "fp16" not in opts:
+        opts["fp16"] = True
+
+    return opts
+
 
 REQUIRED_WEIGHTS = [
     "ProPainter.pth",
