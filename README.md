@@ -46,6 +46,7 @@ watermark-remover/
 ├── app.py                  # Flask application (routes, job management, SSE)
 ├── inference_engine.py     # ProPainter subprocess wrapper + progress tracking
 ├── subtitle_detector.py    # OpenCV heuristic subtitle region detector
+├── patch_propainter.py     # One-time patch for torchvision >= 0.16 (cross-platform)
 ├── requirements.txt        # Python dependencies
 │
 ├── propainter/             # ← Clone ProPainter here (see step 2 below)
@@ -113,7 +114,7 @@ model/
 # Create a virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate        # Linux/macOS
-# venv\Scripts\activate         # Windows
+venv\Scripts\activate           # Windows
 
 # Install PyTorch first (choose the right CUDA version from https://pytorch.org)
 # Example: CUDA 11.8
@@ -125,6 +126,29 @@ pip install -r requirements.txt
 # Also install ProPainter's own requirements
 pip install -r propainter/requirements.txt
 ```
+
+### Step 5 — Patch ProPainter for newer torchvision
+
+ProPainter uses `torchvision.io.read_video`, which was removed in **torchvision >= 0.16**.
+Without this patch the app will crash immediately with:
+
+```
+AttributeError: module 'torchvision.io' has no attribute 'read_video'
+```
+
+Run the included patch script **once** after cloning:
+
+```bash
+python patch_propainter.py
+```
+
+Works on **Windows, macOS, and Linux**. The script:
+- Replaces the broken video-reader with a `cv2.VideoCapture`-based implementation
+- Handles both `str` and `pathlib.Path` inputs (important on Windows)
+- Backs up the original as `propainter/inference_propainter.py.bak`
+- Is safe to re-run — exits early if already patched
+
+> **Note:** Even if your torchvision version is older, running the patch is harmless and recommended for forward compatibility.
 
 ---
 
