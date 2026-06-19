@@ -27,7 +27,8 @@ if not TARGET.exists():
 src = TARGET.read_text(encoding="utf-8")
 
 # ── Already patched? ──────────────────────────────────────────────────────
-if "cv2.VideoCapture" in src and "read_video" not in src:
+SENTINEL = "# PATCHED: torchvision.io.read_video replaced by cv2"
+if SENTINEL in src:
     print("[OK] inference_propainter.py is already patched.")
     sys.exit(0)
 
@@ -63,6 +64,7 @@ if not OLD_FUNC:
     )
 
 NEW_FUNC = '''\
+# PATCHED: torchvision.io.read_video replaced by cv2
 def read_frame_from_videos(frame_root):
     """
     Read frames from a video file or a directory of images.
@@ -100,7 +102,7 @@ def read_frame_from_videos(frame_root):
         size = frames[0].size  # PIL size: (width, height)
     else:
         # ── Directory of images ───────────────────────────────────────────
-        video_name = os.path.basename(frame_root.rstrip("\\/"))
+        video_name = os.path.basename(frame_root.rstrip("/\\"))
         frame_files = sorted([
             f for f in os.listdir(frame_root)
             if os.path.splitext(f)[1] in IMAGE_EXTS
