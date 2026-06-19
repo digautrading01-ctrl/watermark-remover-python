@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Watermark &amp; Subtitle Remover</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Watermark &amp; Subtitle Remover</h1>
+    <p class="subtitle">Powered by ProPainter · 100% offline</p>
+  </header>
+
+  <main>
+
+    <!-- ── Step 1: Upload ─────────────────────────────────────────── -->
+    <section id="sec-upload" class="card active">
+      <h2><span class="step">1</span> Upload Video</h2>
+
+      <div id="drop-zone" class="drop-zone" tabindex="0" role="button"
+           aria-label="Upload video file">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        <p>Drag &amp; drop a video here, or <span class="link">click to browse</span></p>
+        <p class="hint">MP4 · MOV · AVI · MKV · WEBM — max 2 GB</p>
+        <input id="file-input" type="file"
+               accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm"
+               hidden />
+      </div>
+
+      <div id="upload-info" class="upload-info hidden">
+        <span id="upload-filename"></span>
+        <span id="upload-meta"></span>
+      </div>
+    </section>
+
+    <!-- ── Step 2: Draw Mask ──────────────────────────────────────── -->
+    <section id="sec-mask" class="card hidden">
+      <h2><span class="step">2</span> Mark Areas to Remove</h2>
+
+      <div class="toolbar">
+        <div class="tool-group">
+          <button id="tool-brush" class="tool-btn active" title="Freehand brush">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+              <path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/>
+            </svg>
+            Brush
+          </button>
+          <button id="tool-rect" class="tool-btn" title="Rectangle selection">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+            </svg>
+            Rectangle
+          </button>
+          <button id="tool-erase" class="tool-btn" title="Erase">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 20H7L3 16l10-10 7 7-3.5 3.5"/><path d="M6.0001 10L14 18"/>
+            </svg>
+            Erase
+          </button>
+        </div>
+
+        <div class="tool-group">
+          <label class="tool-label">Size
+            <input id="brush-size" type="range" min="5" max="120" value="30" />
+            <span id="brush-size-val">30</span>
+          </label>
+          <label class="tool-label">Opacity
+            <input id="mask-opacity" type="range" min="10" max="90" value="50" />
+          </label>
+        </div>
+
+        <div class="tool-group">
+          <button id="btn-auto-detect" class="secondary-btn">
+            Auto-Detect Subtitles
+          </button>
+          <button id="btn-clear-mask" class="secondary-btn danger">
+            Clear Mask
+          </button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="canvas-video" class="canvas-base"></canvas>
+        <canvas id="canvas-mask"  class="canvas-overlay"></canvas>
+      </div>
+
+      <p class="hint">
+        Paint over watermarks or subtitles. Use <strong>Rectangle</strong> for
+        logos/static text, <strong>Brush</strong> for irregular shapes.
+      </p>
+    </section>
+
+    <!-- ── Step 3: Options ───────────────────────────────────────── -->
+    <section id="sec-options" class="card hidden">
+      <h2><span class="step">3</span> Processing Options</h2>
+
+      <div class="options-grid">
+        <div class="option-row">
+          <label for="opt-fp16">Use FP16 (half precision)</label>
+          <input id="opt-fp16" type="checkbox" checked />
+          <span class="hint">Cuts VRAM usage roughly in half. Recommended.</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-subvideo">Sub-video length</label>
+          <input id="opt-subvideo" type="number" min="20" max="200" value="80" />
+          <span class="hint">Frames processed per chunk. Lower = less VRAM.</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-neighbor">Neighbor length</label>
+          <input id="opt-neighbor" type="number" min="5" max="30" value="10" />
+          <span class="hint">Local temporal context size.</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-dilation">Mask dilation</label>
+          <input id="opt-dilation" type="number" min="0" max="20" value="4" />
+          <span class="hint">Expand mask edges to avoid fringing.</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-resize">Resize ratio</label>
+          <input id="opt-resize" type="number" min="0.25" max="1.0" step="0.05" value="1.0" />
+          <span class="hint">0.5 = process at half resolution (faster, less VRAM).</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-height">Output height (px)</label>
+          <input id="opt-height" type="number" min="-1" value="-1" />
+          <span class="hint">-1 keeps original.</span>
+        </div>
+
+        <div class="option-row">
+          <label for="opt-width">Output width (px)</label>
+          <input id="opt-width" type="number" min="-1" value="-1" />
+          <span class="hint">-1 keeps original.</span>
+        </div>
+      </div>
+
+      <div class="action-row">
+        <button id="btn-process" class="primary-btn">
+          Start Processing
+        </button>
+      </div>
+    </section>
+
+    <!-- ── Step 4: Progress ──────────────────────────────────────── -->
+    <section id="sec-progress" class="card hidden">
+      <h2><span class="step">4</span> Processing</h2>
+
+      <div class="progress-wrap">
+        <div class="progress-bar-track">
+          <div id="progress-bar" class="progress-bar-fill" style="width:0%"></div>
+        </div>
+        <span id="progress-pct">0%</span>
+      </div>
+
+      <p id="progress-msg" class="progress-msg">Initialising…</p>
+
+      <div class="log-wrap">
+        <pre id="progress-log"></pre>
+      </div>
+    </section>
+
+    <!-- ── Step 5: Download ──────────────────────────────────────── -->
+    <section id="sec-done" class="card hidden">
+      <h2><span class="step">5</span> Done!</h2>
+      <p>Your video has been processed. Click below to download.</p>
+      <a id="download-link" class="primary-btn" download>
+        Download Result
+      </a>
+      <button id="btn-new" class="secondary-btn">Process Another Video</button>
+    </section>
+
+    <!-- ── Error ─────────────────────────────────────────────────── -->
+    <section id="sec-error" class="card hidden error-card">
+      <h2>Error</h2>
+      <p id="error-msg"></p>
+      <button id="btn-retry" class="secondary-btn">Start Over</button>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>ProPainter — ICCV 2023 · offline · no data leaves your machine</p>
+  </footer>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>
