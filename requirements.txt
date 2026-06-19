@@ -1,0 +1,21 @@
+# ── Flask web framework ────────────────────────────────────────────────────
+flask>=2.3.0
+werkzeug>=2.3.0
+
+# ── Video / image processing ───────────────────────────────────────────────
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# ── ProPainter dependencies (must also be installed for the propainter/ sub-repo)
+torch>=2.0.0              # https://pytorch.org – install with CUDA wheel if available
+torchvision>=0.15.0
+einops>=0.6.0
+scipy>=1.10.0
+scikit-image>=0.21.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+av>=10.0.0
+timm>=0.9.0
+addict>=2.4.0
+yapf>=0.33.0
+requests>=2.31.0
